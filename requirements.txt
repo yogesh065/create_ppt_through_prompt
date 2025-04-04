@@ -7,3 +7,4 @@ requests
 mcp[cli]
 langchain-mcp-adapters
 langgraph
+streamlit-reveal-slides
