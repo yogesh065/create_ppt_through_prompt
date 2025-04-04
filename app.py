@@ -621,7 +621,8 @@ with tab1:
                         data=st.session_state.presentation_file,
                         file_name=f"{topic.replace(' ', '_')}_presentation.pptx",
                         mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                        use_container_width=True
+                        use_container_width=True,
+                                key="download_button_tab1"  # Use a different unique key here
                     )
 
 with tab2:
@@ -647,7 +648,8 @@ with tab2:
                 data=st.session_state.presentation_file,
                 file_name=f"{topic.replace(' ', '_')}_presentation.pptx",
                 mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                use_container_width=True
+                use_container_width=True,
+                        key="download_button_tab2"  # Use a different unique key here
             )
     else:
         st.info("Generate a presentation in the 'Create Presentation' tab to see a preview here.")
