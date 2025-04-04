@@ -1,7 +1,7 @@
 import streamlit as st
 from pptx import Presentation
 from mcp import ClientSession
-from langchain_mcp_adapters import MultiServerMCPClient
+from langchain_mcp_adapters.client import MultiServerMCPClient
 import asyncio
 import json
 import os
