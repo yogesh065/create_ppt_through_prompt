@@ -1,10 +1,30 @@
-streamlit 
-groq 
-python-pptx 
-python-dotenv 
-beautifulsoup4 
-requests
-mcp[cli]
-langchain-mcp-adapters
-langgraph
-streamlit-reveal-slides
+# Core dependencies
+streamlit>=1.22.0
+python-dotenv>=0.19.2
+requests>=2.28.1
+beautifulsoup4>=4.11.1
+Pillow>=9.2.0
+
+# Presentation generation
+python-pptx>=0.6.21
+streamlit-reveal-slides>=0.2.0
+
+# AI API integration
+groq>=0.4.0
+
+# Web handling and parsing
+lxml>=4.9.1
+html5lib>=1.1
+
+# Image processing
+matplotlib>=3.5.2
+
+# Concurrent processing
+futures>=3.0.5
+
+# JSON handling
+simplejson>=3.17.6
+
+# Optional - for advanced features
+pandas>=1.4.3
+numpy>=1.23.1
