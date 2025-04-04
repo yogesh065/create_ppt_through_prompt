@@ -7,4 +7,3 @@ requests
 mcp[cli]
 langchain-mcp-adapters
 langgraph
-mcp-sdk
