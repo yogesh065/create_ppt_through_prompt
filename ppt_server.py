@@ -2,6 +2,7 @@ from mcp.server.fastmcp import FastMCP
 from groq import Groq
 import json
 import os
+import streamlit as st
 
 mcp = FastMCP("pptgen")
 api_key= st.secrets["k"]["api_key"]
