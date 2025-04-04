@@ -1,16 +1,19 @@
 import streamlit as st
 from pptx import Presentation
-from mcp import ClientSession
+from groq import Groq
+from mcp.client.stdio import StdioServerParameters  # Correct import path
 from mcp.client.stdio import stdio_client
-from mcp.types import StdioServerParameters
+from mcp import ClientSession
 import asyncio
 import json
+import os
 
-# Streamlit app configuration
-st.title("MCP-Powered Presentation Generator")
+# Load environment variables
+groq_api_key = st.secrets["GROQ_API_KEY"]
+client = Groq(api_key=groq_api_key)
 
 async def generate_presentation(topic: str):
-    """Main workflow using MCP protocol"""
+    """Main workflow using updated MCP SDK patterns"""
     # Configure MCP server parameters
     server_params = StdioServerParameters(
         command="python",
@@ -19,26 +22,25 @@ async def generate_presentation(topic: str):
 
     async with stdio_client(server_params) as (read, write):
         async with ClientSession(read, write) as session:
-            # Initialize connection
             await session.initialize()
-
+            
             # Execute web search tool
             search_results = await session.call_tool(
                 "web_search",
                 {"query": topic, "max_results": 5}
             )
 
-            # Generate PPT content
-            content = await session.get_prompt(
-                "ppt_generator",
-                arguments={
-                    "topic": topic,
-                    "context": json.dumps(search_results)
-                }
-            )
-
-            # Create PowerPoint file
-            return create_pptx(content.messages[0].content.text)
+            # Generate PPT content using Groq
+            content = client.chat.completions.create(
+                messages=[{
+                    "role": "user",
+                    "content": f"Create slides about {topic} using this data: {search_results}"
+                }],
+                model="llama3-70b-8192",
+                temperature=0.4
+            ).choices[0].message.content
+            
+            return create_pptx(content)
 
 def create_pptx(content: str):
     """Convert structured content to PowerPoint"""

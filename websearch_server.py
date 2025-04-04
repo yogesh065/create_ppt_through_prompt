@@ -5,6 +5,8 @@ import requests
 import re
 import json
 
+
+
 mcp = FastMCP("websearch")
 
 @mcp.tool()
