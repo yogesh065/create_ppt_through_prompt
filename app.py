@@ -1,138 +1,118 @@
 import streamlit as st
 from pptx import Presentation
-from pptx.util import Inches
-from groq import Groq
-from dotenv import load_dotenv
+from mcp import ClientSession, MCPServerStdio
+from langchain_mcp_adapters import MultiServerMCPClient
+import asyncio
+import json
 import os
-import requests
-from bs4 import BeautifulSoup
+from dotenv import load_dotenv
 
-# Load environment variables (Groq API Key)
+# Load environment variables
 load_dotenv()
-groq_api_key = st.secrets["k"]["api_key"]
-if not groq_api_key:
-    st.error("Please set your GROQ_API_KEY in a .env file.")
-    st.stop()
+st.set_page_config(page_title="MCP PPT Maker", layout="wide")
 
-# Initialize Groq client
-client = Groq(api_key=groq_api_key)
+class MCPPPTGenerator:
+    def __init__(self):
+        self.mcp_client = MultiServerMCPClient()
+        self.presentation = Presentation()
+        
+    async def search_and_generate(self, query, style="professional"):
+        """Main workflow: Search -> Generate -> Create PPT"""
+        async with self.mcp_client:
+            # Get search results
+            results = await self._mcp_web_search(query)
+            
+            # Generate content using MCP
+            content = await self._generate_content(query, results, style)
+            
+            # Create presentation
+            self._create_slides(content)
+            return "presentation.pptx"
 
-# Streamlit app title
-st.title("Groq-Powered Slide Generator")
-
-# Function to generate slide content using Groq
-def groq_generate_content(topic, context):
-    try:
-        # Send request to Groq API
-        response = client.chat.completions.create(
-            messages=[
-                {
-                    "role": "user",
-                    "content": f"Create 5 slide titles and bullet points about {topic}. Context: {context}"
-                }
-            ],
-            model="llama-3.3-70b-specdec",  # Replace with your preferred model (e.g., llama2-70b-4096)
-            temperature=0.7,
-            max_tokens=4024,
+    async def _mcp_web_search(self, query):
+        """Enhanced web search with MCP"""
+        result = await self.mcp_client.execute_tool(
+            "web_search",
+            params={"query": query, "max_results": 5}
         )
-        generated_text = response.choices[0].message.content
-        return generated_text
-    except Exception as e:
-        st.error(f"Error generating content with Groq: {e}")
-        return None
+        return json.loads(result)
 
-# Function to create a PowerPoint presentation from generated content
-def create_presentation(topic, slide_content):
-    prs = Presentation()
-    title_slide_layout = prs.slide_layouts[0]
-    bullet_slide_layout = prs.slide_layouts[1]
+    async def _generate_content(self, query, results, style):
+        """Generate PPT content using MCP"""
+        context = "\n".join([f"{r['title']}: {r['snippet']}" for r in results])
+        
+        return await self.mcp_client.execute_tool(
+            "ppt_content_generator",
+            params={
+                "topic": query,
+                "context": context,
+                "style": style,
+                "slide_count": 7
+            }
+        )
 
-    # Title Slide
-    slide = prs.slides.add_slide(title_slide_layout)
-    title = slide.shapes.title
-    subtitle = slide.placeholders[1]
-    title.text = topic
-    subtitle.text = "Generated using Groq and Streamlit"
+    def _create_slides(self, content):
+        """Create PPTX from structured content"""
+        # Title slide
+        title_slide = self.presentation.slides.add_slide(
+            self.presentation.slide_layouts[0]
+        )
+        title_slide.shapes.title.text = json.loads(content)["title"]
+        
+        # Content slides
+        for slide in json.loads(content)["slides"]:
+            content_slide = self.presentation.slides.add_slide(
+                self.presentation.slide_layouts[1]
+            )
+            content_slide.shapes.title.text = slide["title"]
+            content_body = content_slide.shapes.placeholders[1]
+            
+            for point in slide["points"]:
+                p = content_body.text_frame.add_paragraph()
+                p.text = point
+                
+        self.presentation.save("presentation.pptx")
 
-    # Create slides from content
-    slides = slide_content.split("\n\n")  # Split into sections for each slide
-    for slide_text in slides:
-        lines = slide_text.split("\n")
-        if len(lines) < 2:
-            continue  # Skip empty or incomplete sections
-
-        slide_title = lines[0].replace("Title: ", "")  # Extract title
-        bullet_points = lines[1:]  # Extract bullet points
-
-        # Add a new slide with bullet points
-        slide = prs.slides.add_slide(bullet_slide_layout)
-        shapes = slide.shapes
-        title_shape = shapes.title
-        body_shape = shapes.placeholders[1]
-        title_shape.text = slide_title
-
-        # Add bullet points to the slide
-        tf = body_shape.text_frame
-        for point in bullet_points:
-            p = tf.add_paragraph()
-            p.text = point.strip()
-
-    # Save the presentation to a file
-    file_path = "generated_presentation.pptx"
-    prs.save(file_path)
-    return file_path
-
-# Optional: Perform a web search for additional context using BeautifulSoup and requests
-def web_search(topic):
-    try:
-        url = f"https://www.google.com/search?q={topic}"
-        headers = {"User-Agent": "Mozilla/5.0"}
-        response = requests.get(url, headers=headers)
-        soup = BeautifulSoup(response.text, "html.parser")
-        results = soup.find_all("div", class_="BNeawe vvjwJb AP7Wnd")
-        return [result.text for result in results[:5]]  # Return top 5 results
-    except Exception as e:
-        st.error(f"Error performing web search: {e}")
-        return []
-
-# Streamlit input fields for user input
-topic = st.text_input("Enter the topic of the slides:")
-context = st.text_area("Enter additional context or details (optional):")
-
-# Generate Slides Button
-if st.button("Generate Slides"):
-    if topic:
-        with st.spinner("Generating slides using Groq..."):
-            generated_content = groq_generate_content(topic, context)
-            if generated_content:
-                st.subheader("Generated Slide Content:")
-                st.write(generated_content)
-
-                # Create PowerPoint presentation and provide download link
-                file_path = create_presentation(topic, generated_content)
-                with open(file_path, "rb") as file:
+async def main_async():
+    st.title("MCP-Powered Presentation Maker")
+    
+    # UI Controls
+    col1, col2 = st.columns([3, 1])
+    
+    with col1:
+        query = st.text_input("Presentation Topic:", 
+                            "Latest AI Developments 2025")
+        style = st.selectbox("Presentation Style:", 
+                           ["Professional", "Educational", "Marketing"])
+        
+    with col2:
+        st.write("### Settings")
+        slide_count = st.slider("Slides", 5, 15, 7)
+        
+    if st.button("Generate Presentation"):
+        generator = MCPPPTGenerator()
+        
+        with st.spinner("Creating your presentation..."):
+            try:
+                ppt_file = await generator.search_and_generate(query, style.lower())
+                
+                with open(ppt_file, "rb") as f:
                     st.download_button(
-                        label="Download PowerPoint Presentation",
-                        data=file,
-                        file_name="generated_presentation.pptx",
-                        mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                        "Download PPTX",
+                        f,
+                        file_name=ppt_file,
+                        mime="application/vnd.openxmlformats-officedocument.presentationml.presentation"
                     )
-            else:
-                st.error("Failed to generate content. Please try again.")
-    else:
-        st.warning("Please enter a topic.")
+                
+                st.success("Presentation generated successfully!")
+                st.json(json.loads(generator.content), expanded=False)
+                
+            except Exception as e:
+                st.error(f"Generation failed: {str(e)}")
 
-# Optional Web Search Button for Additional Context
-if st.button("Perform Web Search"):
-    if topic:
-        with st.spinner(f"Searching the web for '{topic}'..."):
-            search_results = web_search(topic)
-            if search_results:
-                st.subheader("Top Web Search Results:")
-                for i, result in enumerate(search_results, start=1):
-                    st.write(f"{i}. {result}")
-            else:
-                st.error("No results found.")
-    else:
-        st.warning("Please enter a topic to search.")
+# Streamlit async wrapper
+def main():
+    asyncio.run(main_async())
 
+if __name__ == "__main__":
+    main()
