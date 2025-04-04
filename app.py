@@ -9,7 +9,7 @@ import json
 import os
 
 # Load environment variables
-groq_api_key = st.secrets["GROQ_API_KEY"]
+groq_api_key = groq_api_key = st.secrets["k"]["api_key"]
 client = Groq(api_key=groq_api_key)
 
 async def generate_presentation(topic: str):
