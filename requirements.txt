@@ -4,5 +4,5 @@ python-pptx
 python-dotenv 
 beautifulsoup4 
 requests
-mcp-python-sdk
+mcp[cli]
 langchain-mcp-adapters
