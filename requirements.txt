@@ -1,0 +1,6 @@
+streamlit 
+groq 
+python-pptx 
+python-dotenv 
+beautifulsoup4 
+requests
