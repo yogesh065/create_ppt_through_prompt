@@ -4,7 +4,9 @@ import json
 import os
 
 mcp = FastMCP("pptgen")
-groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+api_key= st.secrets["k"]["api_key"]
+
+groq_client = Groq(api_key=api_key)
 
 @mcp.tool()
 async def generate_ppt_content(topic: str, context: str) -> str:
