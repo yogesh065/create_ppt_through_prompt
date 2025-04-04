@@ -6,3 +6,4 @@ beautifulsoup4
 requests
 mcp[cli]
 langchain-mcp-adapters
+langgraph
