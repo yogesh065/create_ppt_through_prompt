@@ -10,7 +10,7 @@ import os
 import sys
 
 # Load environment variables
-groq_api_key = st.secrets["GROQ_API_KEY"]
+groq_api_key = st.secrets["k"]["api_key"]
 os.environ["MCP_LOG_LEVEL"] = "INFO"
 
 class MCPPresentationGenerator:
