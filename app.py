@@ -1,100 +1,109 @@
+# main.py (Streamlit App)
 import streamlit as st
 from pptx import Presentation
-from mcp import ClientSession
 from langchain_mcp_adapters.client import MultiServerMCPClient
+from langgraph.prebuilt import create_react_agent
+from groq import Groq
 import asyncio
 import json
 import os
-from dotenv import load_dotenv
+import sys
 
 # Load environment variables
-load_dotenv()
-st.set_page_config(page_title="MCP PPT Maker", layout="wide")
+groq_api_key = st.secrets["GROQ_API_KEY"]
+os.environ["MCP_LOG_LEVEL"] = "INFO"
 
-class MCPPPTGenerator:
+class MCPPresentationGenerator:
     def __init__(self):
-        self.mcp_client = MultiServerMCPClient()
-        self.presentation = Presentation()
+        self.client = MultiServerMCPClient()
+        self.agent = None
+        self.groq_client = Groq(api_key=groq_api_key)
         
-    async def search_and_generate(self, query, style="professional"):
-        """Main workflow: Search -> Generate -> Create PPT"""
-        async with self.mcp_client:
-            # Get search results
-            results = await self._mcp_web_search(query)
-            
-            # Generate content using MCP
-            content = await self._generate_content(query, results, style)
-            
-            # Create presentation
-            self._create_slides(content)
-            return "presentation.pptx"
-
-    async def _mcp_web_search(self, query):
-        """Enhanced web search with MCP"""
-        result = await self.mcp_client.execute_tool(
-            "web_search",
-            params={"query": query, "max_results": 5}
-        )
-        return json.loads(result)
-
-    async def _generate_content(self, query, results, style):
-        """Generate PPT content using MCP"""
-        context = "\n".join([f"{r['title']}: {r['snippet']}" for r in results])
-        
-        return await self.mcp_client.execute_tool(
-            "ppt_content_generator",
-            params={
-                "topic": query,
-                "context": context,
-                "style": style,
-                "slide_count": 7
-            }
-        )
-
-    def _create_slides(self, content):
-        """Create PPTX from structured content"""
-        # Title slide
-        title_slide = self.presentation.slides.add_slide(
-            self.presentation.slide_layouts[0]
-        )
-        title_slide.shapes.title.text = json.loads(content)["title"]
-        
-        # Content slides
-        for slide in json.loads(content)["slides"]:
-            content_slide = self.presentation.slides.add_slide(
-                self.presentation.slide_layouts[1]
+    async def initialize_services(self):
+        """Initialize MCP connections"""
+        try:
+            # Connect to web search service
+            await self.client.connect_to_server(
+                "websearch",
+                command=sys.executable,
+                args=["websearch_server.py"],
+                transport="stdio"
             )
-            content_slide.shapes.title.text = slide["title"]
-            content_body = content_slide.shapes.placeholders[1]
             
-            for point in slide["points"]:
-                p = content_body.text_frame.add_paragraph()
-                p.text = point
+            # Connect to PPT generation service
+            await self.client.connect_to_server(
+                "pptgen",
+                command=sys.executable,
+                args=["pptgen_server.py"],
+                transport="stdio"
+            )
+            
+            # Create agent with tools
+            self.agent = create_react_agent(self.groq_client, self.client.get_tools())
+            
+        except Exception as e:
+            st.error(f"Service initialization failed: {str(e)}")
+            raise
+
+    async def generate_presentation(self, query):
+        """Generate presentation using Groq LLM"""
+        try:
+            response = await self.agent.ainvoke({
+                "messages": [{
+                    "role": "user",
+                    "content": f"Create professional slides about: {query}"
+                }]
+            })
+            return self._create_pptx(response['messages'][-1]['content'])
+            
+        except Exception as e:
+            st.error(f"Generation failed: {str(e)}")
+            raise
+
+    def _create_pptx(self, content):
+        """Convert structured content to PowerPoint"""
+        try:
+            data = json.loads(content)
+            prs = Presentation()
+            
+            # Title Slide
+            title_slide = prs.slides.add_slide(prs.slide_layouts[0])
+            title_slide.shapes.title.text = data['title']
+            title_slide.placeholders[1].text = data.get('subtitle', 'Generated with Groq')
+            
+            # Content Slides
+            for slide in data['slides']:
+                content_slide = prs.slides.add_slide(prs.slide_layouts[1])
+                content_slide.shapes.title.text = slide['title']
+                body = content_slide.shapes.placeholders[1]
                 
-        self.presentation.save("presentation.pptx")
+                for point in slide['points']:
+                    p = body.text_frame.add_paragraph()
+                    p.text = point
+                    p.level = 0
+                    
+            file_path = "presentation.pptx"
+            prs.save(file_path)
+            return file_path
+            
+        except Exception as e:
+            st.error(f"PPT Creation Error: {str(e)}")
+            raise
 
 async def main_async():
-    st.title("MCP-Powered Presentation Maker")
+    st.title("Groq-Powered Presentation Generator")
+    generator = MCPPresentationGenerator()
     
-    # UI Controls
-    col1, col2 = st.columns([3, 1])
+    with st.spinner("Initializing services..."):
+        await generator.initialize_services()
     
-    with col1:
-        query = st.text_input("Presentation Topic:", 
-                            "Latest AI Developments 2025")
-        style = st.selectbox("Presentation Style:", 
-                           ["Professional", "Educational", "Marketing"])
-        
-    with col2:
-        st.write("### Settings")
-        slide_count = st.slider("Slides", 5, 15, 7)
-        
+    query = st.text_input("Enter presentation topic:", 
+                        "Large Language Model Applications 2025")
+    
     if st.button("Generate Presentation"):
-        generator = MCPPPTGenerator()
-        
         with st.spinner("Creating your presentation..."):
             try:
-                ppt_file = await generator.search_and_generate(query, style.lower())
+                ppt_file = await generator.generate_presentation(query)
                 
                 with open(ppt_file, "rb") as f:
                     st.download_button(
@@ -105,12 +114,11 @@ async def main_async():
                     )
                 
                 st.success("Presentation generated successfully!")
-                st.json(json.loads(generator.content), expanded=False)
+                st.json(json.loads(open(ppt_file.replace(".pptx", ".json")).read()))
                 
             except Exception as e:
-                st.error(f"Generation failed: {str(e)}")
+                st.error(f"Final Error: {str(e)}")
 
-# Streamlit async wrapper
 def main():
     asyncio.run(main_async())
 
