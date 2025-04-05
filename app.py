@@ -15,8 +15,10 @@ from PIL import Image
 from io import BytesIO
 import re
 from urllib.parse import quote
+import time
+import random
 
-# Import reveal_slides safely with a fallback
+# Try to import reveal_slides, with fallback if not available
 try:
     import reveal_slides as rs
     REVEAL_SLIDES_AVAILABLE = True
@@ -103,7 +105,7 @@ if 'include_images' not in st.session_state:
 if 'num_slides' not in st.session_state:
     st.session_state.num_slides = 5
 
-# Presentation themes with more distinct colors
+# Presentation themes with enhanced colors
 THEMES = {
     "professional": {
         "title_font_size": Pt(36),
@@ -142,113 +144,169 @@ THEMES = {
     }
 }
 
-# Function to search the web for information - Updated with more robust selectors and error handling
-def search_web(query, num_results=3):
-    """Search the web for information related to the query with improved error handling."""
-    try:
-        # Clean and encode the query
-        clean_query = quote(query)
-        
-        # Make the request to a search engine
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-        }
-        response = requests.get(
-            f"https://www.google.com/search?q={clean_query}&num={num_results*2}", 
-            headers=headers,
-            timeout=10
-        )
-        
-        if response.status_code != 200:
-            return [{"title": "Search Error", 
-                    "link": "#", 
-                    "snippet": f"Unable to retrieve search results (Status code: {response.status_code})"}]
-        
-        # Parse the HTML
-        soup = BeautifulSoup(response.text, 'html.parser')
-        
-        # Extract search results - Try multiple selector patterns for better reliability
-        results = []
-        # Try different container selectors that Google might use
-        search_containers = []
-        search_containers.extend(soup.select('div.g'))
-        search_containers.extend(soup.select('div.Gx5Zad'))
-        search_containers.extend(soup.select('div.tF2Cxc'))
-        
-        for container in search_containers[:num_results]:
-            try:
-                # Try different title selectors
-                title_elem = None
-                for selector in ['h3', 'h3.LC20lb', 'div.DKV0Md']:
-                    title_elem = container.select_one(selector)
-                    if title_elem:
-                        break
-                
-                if not title_elem:
-                    continue
-                
-                title = title_elem.text.strip()
-                
-                # Try different link selectors
-                link = ""
-                link_elem = container.select_one('a')
-                if link_elem and 'href' in link_elem.attrs:
-                    link = link_elem['href']
-                    if link.startswith('/url?'):
-                        link = re.search(r'url\?q=([^&]+)', link).group(1)
-                
-                # Try different snippet selectors
-                snippet = "No description available"
-                for selector in ['div.VwiC3b', 'span.aCOpRe', 'div.s3v9rd', 'div.lEBKkf']:
-                    snippet_elem = container.select_one(selector)
-                    if snippet_elem:
-                        snippet = snippet_elem.text.strip()
-                        break
-                
-                # Only add if we have at least a title
-                if title:
-                    results.append({
-                        "title": title,
-                        "link": link,
-                        "snippet": snippet
-                    })
-                
-                # Break if we have enough results
-                if len(results) >= num_results:
-                    break
-                    
-            except Exception as e:
-                continue
-        
-        # If we couldn't find any results with the selectors
-        if not results:
-            # Fallback - look for any links with text
-            for link in soup.select('a'):
-                if link.text and link.has_attr('href') and not link['href'].startswith('#'):
-                    results.append({
-                        "title": link.text.strip(),
-                        "link": link['href'],
-                        "snippet": "Description not available"
-                    })
-                    if len(results) >= num_results:
-                        break
-        
-        # If still no results, return a fallback
-        if not results:
-            results = [
-                {"title": "No Results Found", 
-                 "link": "#", 
-                 "snippet": f"Unable to find search results for '{query}'. Try a different search term."}
+# Improved function to search the web with multiple fallbacks and better error handling
+def search_web(query, num_results=3, max_retries=2):
+    """Search the web for information related to the query with improved reliability."""
+    for attempt in range(max_retries):
+        try:
+            # Clean and encode the query
+            clean_query = quote(query)
+            
+            # Select a search engine - try multiple for better reliability
+            search_engines = [
+                # Google
+                {
+                    "url": f"https://www.google.com/search?q={clean_query}&num={num_results*2}",
+                    "result_selector": ["div.g", "div.Gx5Zad", "div.tF2Cxc"],
+                    "title_selector": ["h3", "h3.LC20lb"],
+                    "link_selector": ["a"],
+                    "snippet_selector": ["div.VwiC3b", "span.aCOpRe", "div.s3v9rd"]
+                },
+                # Bing
+                {
+                    "url": f"https://www.bing.com/search?q={clean_query}&count={num_results*2}",
+                    "result_selector": ["li.b_algo", "div.b_title", "div.b_caption"],
+                    "title_selector": ["h2", "a"],
+                    "link_selector": ["a", "cite"],
+                    "snippet_selector": ["p", "div.b_caption p"]
+                }
             ]
             
-        return results
-    except Exception as e:
-        # Return a friendly error message that can be displayed to users
-        return [{"title": "Search Error", 
-                "link": "#", 
-                "snippet": f"Error during web search: {str(e)}. Try again or use a different search term."}]
+            # Try each search engine until successful
+            for engine in search_engines:
+                headers = {
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+                }
+                
+                response = requests.get(engine["url"], headers=headers, timeout=10)
+                
+                if response.status_code != 200:
+                    continue
+                
+                # Parse the HTML
+                soup = BeautifulSoup(response.text, 'html.parser')
+                
+                # Extract search results using multiple selectors for reliability
+                results = []
+                
+                # Try each result selector
+                for selector in engine["result_selector"]:
+                    search_divs = soup.select(selector)
+                    if search_divs:
+                        break
+                
+                if not search_divs:
+                    continue
+                
+                # Process found result containers
+                for div in search_divs[:num_results*2]:
+                    try:
+                        # Try multiple title selectors
+                        title = None
+                        for title_selector in engine["title_selector"]:
+                            title_elem = div.select_one(title_selector)
+                            if title_elem:
+                                title = title_elem.get_text().strip()
+                                break
+                        
+                        if not title:
+                            continue
+                        
+                        # Try multiple link selectors
+                        link = ""
+                        for link_selector in engine["link_selector"]:
+                            link_elem = div.select_one(link_selector)
+                            if link_elem and link_elem.has_attr('href'):
+                                link = link_elem['href']
+                                # Clean up Google's redirect URLs
+                                if link.startswith('/url?'):
+                                    link = re.search(r'url\?q=([^&]+)', link)
+                                    if link:
+                                        link = link.group(1)
+                                break
+                        
+                        # Try multiple snippet selectors
+                        snippet = "No description available"
+                        for snippet_selector in engine["snippet_selector"]:
+                            snippet_elem = div.select_one(snippet_selector)
+                            if snippet_elem:
+                                snippet = snippet_elem.get_text().strip()
+                                break
+                        
+                        # Add to results if we have at least title and link
+                        if title and link and link.startswith('http'):
+                            results.append({
+                                "title": title,
+                                "link": link,
+                                "snippet": snippet
+                            })
+                            
+                            # Break once we have enough results
+                            if len(results) >= num_results:
+                                break
+                    except Exception as e:
+                        continue
+                
+                # If we found results, return them
+                if results:
+                    return results
+                
+                # Add delay between search engine attempts
+                time.sleep(1)
+            
+            # If we've tried all engines and still no results, try one more approach
+            try:
+                # Try using DuckDuckGo as a last resort
+                ddg_url = f"https://html.duckduckgo.com/html/?q={clean_query}"
+                response = requests.get(ddg_url, headers=headers, timeout=10)
+                
+                if response.status_code == 200:
+                    soup = BeautifulSoup(response.text, 'html.parser')
+                    results = []
+                    
+                    for result in soup.select('.result'):
+                        try:
+                            title_elem = result.select_one('.result__title')
+                            link_elem = result.select_one('.result__url')
+                            snippet_elem = result.select_one('.result__snippet')
+                            
+                            if title_elem and link_elem:
+                                title = title_elem.get_text().strip()
+                                link = link_elem.get_text().strip()
+                                snippet = snippet_elem.get_text().strip() if snippet_elem else "No description available"
+                                
+                                results.append({
+                                    "title": title,
+                                    "link": f"https://{link}",
+                                    "snippet": snippet
+                                })
+                                
+                                if len(results) >= num_results:
+                                    break
+                        except Exception:
+                            continue
+                    
+                    if results:
+                        return results
+            except Exception:
+                pass
+            
+            # Add delay between retry attempts
+            if attempt < max_retries - 1:
+                time.sleep(2)
+        
+        except Exception as e:
+            if attempt < max_retries - 1:
+                time.sleep(2)
+    
+    # If all attempts fail, return a fallback message
+    return [{
+        "title": "Search Failed",
+        "link": "#",
+        "snippet": f"Unable to retrieve search results for '{query}'. Please try again later."
+    }]
 
-# Function to extract content from a webpage with improved error handling
+# Improved function to extract content from webpages
 def extract_webpage_content(url):
     try:
         if not url.startswith('http'):
@@ -260,7 +318,7 @@ def extract_webpage_content(url):
         response = requests.get(url, headers=headers, timeout=10)
         
         if response.status_code != 200:
-            return f"Failed to retrieve page content: {response.status_code}"
+            return f"Failed to retrieve content: Status code {response.status_code}"
         
         soup = BeautifulSoup(response.text, 'html.parser')
         
@@ -268,9 +326,14 @@ def extract_webpage_content(url):
         for script in soup(["script", "style"]):
             script.extract()
         
-        # Extract text from paragraphs, headers and lists
-        content_elements = soup.select('p, h1, h2, h3, h4, h5, h6, li')
-        content = ' '.join([elem.get_text() for elem in content_elements])
+        # Extract text from main content elements
+        content_elements = soup.select('p, h1, h2, h3, h4, h5, h6, li, article, main, .content, .article')
+        
+        if not content_elements:
+            # Fallback to extracting all text
+            content = soup.get_text()
+        else:
+            content = ' '.join([elem.get_text() for elem in content_elements])
         
         # Clean up whitespace
         content = re.sub(r'\s+', ' ', content).strip()
@@ -283,73 +346,140 @@ def extract_webpage_content(url):
     except Exception as e:
         return f"Error extracting content: {str(e)}"
 
-# Improved function to get images for slides with multiple fallback methods
-def get_image_for_topic(topic):
+# Significantly improved function to get images with multiple sources and fallbacks
+def get_image_for_topic(topic, use_flowchart=False):
+    """Get an image or flowchart for a given topic using multiple methods."""
     try:
-        # Method 1: Try Unsplash API first (more reliable than scraping)
-        try:
-            unsplash_url = f"https://source.unsplash.com/featured/?{quote(topic)}"
-            response = requests.get(unsplash_url, timeout=10)
-            if response.status_code == 200:
-                return response.content
-        except:
-            pass
-            
-        # Method 2: Try Bing image search as before
-        search_url = f"https://www.bing.com/images/search?q={quote(topic)}&first=1"
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-        }
-        response = requests.get(search_url, headers=headers, timeout=10)
-        
-        if response.status_code == 200:
-            soup = BeautifulSoup(response.text, 'html.parser')
-            
-            # Look for image URLs in the page - try multiple selectors
-            img_urls = []
-            for selector in ['img.mimg', 'a.iusc img', 'img.inflnk']:
-                for img in soup.select(selector):
-                    if 'src' in img.attrs and img['src'].startswith('http'):
-                        img_urls.append(img['src'])
-                    elif 'data-src' in img.attrs and img['data-src'].startswith('http'):
-                        img_urls.append(img['data-src'])
-            
-            # Look for base64 images as a last resort
-            if not img_urls:
-                for img in soup.select('img[src^="data:image"]'):
+        # Method 1: Use Unsplash API for reliable, high-quality images
+        if not use_flowchart:
+            try:
+                unsplash_url = f"https://source.unsplash.com/featured/?{quote(topic)}"
+                response = requests.get(unsplash_url, timeout=10)
+                if response.status_code == 200:
+                    # Verify it's an actual image
                     try:
-                        img_data = img['src'].split(',')[1]
-                        img_binary = base64.b64decode(img_data)
-                        return img_binary
+                        Image.open(BytesIO(response.content))
+                        return response.content
+                    except:
+                        pass  # Not a valid image, continue to next method
+            except:
+                pass  # Continue to next method if this fails
+        
+        # Method 2: For flowcharts, try a flowchart API/generator
+        if use_flowchart:
+            try:
+                # Try a placeholder flowchart service
+                flowchart_url = f"https://quickchart.io/graphviz?graph=digraph {{{quote(topic)}}};"
+                response = requests.get(flowchart_url, timeout=10)
+                if response.status_code == 200:
+                    # Verify it's an actual image
+                    try:
+                        Image.open(BytesIO(response.content))
+                        return response.content
+                    except:
+                        pass  # Not a valid image, continue to next method
+            except:
+                pass  # Continue to next method if this fails
+        
+        # Method 3: Try Bing image search with multiple selectors
+        try:
+            search_term = f"{topic} {'flowchart' if use_flowchart else ''}"
+            search_url = f"https://www.bing.com/images/search?q={quote(search_term)}&first=1"
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+            }
+            response = requests.get(search_url, headers=headers, timeout=10)
+            
+            if response.status_code == 200:
+                soup = BeautifulSoup(response.text, 'html.parser')
+                
+                # Try multiple selectors that might contain image URLs
+                img_urls = []
+                for selector in ['img.mimg', 'a.iusc img', 'img.inflnk', 'img[src^="http"]']:
+                    for img in soup.select(selector):
+                        if 'src' in img.attrs and img['src'].startswith('http'):
+                            img_urls.append(img['src'])
+                        elif 'data-src' in img.attrs and img['data-src'].startswith('http'):
+                            img_urls.append(img['data-src'])
+                
+                # Try each URL until we find a valid image
+                for img_url in img_urls[:5]:
+                    try:
+                        img_response = requests.get(img_url, headers=headers, timeout=5)
+                        if img_response.status_code == 200:
+                            # Verify it's a valid image
+                            try:
+                                Image.open(BytesIO(img_response.content))
+                                return img_response.content
+                            except:
+                                continue  # Not a valid image, try next URL
                     except:
                         continue
-                    
-            # Get the first valid image
-            for img_url in img_urls[:5]:
-                try:
-                    img_response = requests.get(img_url, headers=headers, timeout=5)
-                    if img_response.status_code == 200:
-                        return img_response.content
-                except:
-                    continue
+        except:
+            pass  # Continue to next method if this fails
         
-        # Method 3: Fallback to a placeholder image service
+        # Method 4: Generate a diagram using diagram.net API for flowcharts
+        if use_flowchart:
+            try:
+                # Create a simple flowchart using the diagrams.net API
+                flowchart_xml = f"""
+                <mxGraphModel>
+                    <root>
+                        <mxCell id="0"/>
+                        <mxCell id="1" parent="0"/>
+                        <mxCell id="2" value="{topic}" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+                            <mxGeometry x="120" y="120" width="200" height="60" as="geometry"/>
+                        </mxCell>
+                        <mxCell id="3" value="Process" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1">
+                            <mxGeometry x="120" y="240" width="200" height="60" as="geometry"/>
+                        </mxCell>
+                        <mxCell id="4" value="" style="endArrow=classic;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="2" target="3">
+                            <mxGeometry width="50" height="50" relative="1" as="geometry">
+                                <mxPoint x="390" y="410" as="sourcePoint"/>
+                                <mxPoint x="440" y="360" as="targetPoint"/>
+                            </mxGeometry>
+                        </mxCell>
+                        <mxCell id="5" value="Output" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;" vertex="1" parent="1">
+                            <mxGeometry x="120" y="360" width="200" height="60" as="geometry"/>
+                        </mxCell>
+                        <mxCell id="6" value="" style="endArrow=classic;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="3" target="5">
+                            <mxGeometry width="50" height="50" relative="1" as="geometry">
+                                <mxPoint x="390" y="410" as="sourcePoint"/>
+                                <mxPoint x="440" y="360" as="targetPoint"/>
+                            </mxGeometry>
+                        </mxCell>
+                    </root>
+                </mxGraphModel>
+                """
+                
+                flowchart_xml_encoded = quote(flowchart_xml)
+                chart_url = f"https://chart.googleapis.com/chart?cht=tx&chl={flowchart_xml_encoded}"
+                response = requests.get(chart_url, timeout=10)
+                
+                if response.status_code == 200:
+                    return response.content
+            except:
+                pass  # Continue to next method if this fails
+        
+        # Method 5: Last resort - generate a placeholder image with text
         try:
-            placeholder_url = f"https://via.placeholder.com/800x600.png?text={quote(topic)}"
-            response = requests.get(placeholder_url, timeout=5)
+            placeholder_url = f"https://via.placeholder.com/800x600.png?text={quote(topic.replace(' ', '+'))}"
+            response = requests.get(placeholder_url, timeout=10)
             if response.status_code == 200:
                 return response.content
         except:
             pass
-            
+        
+        # If all methods fail, return None
         return None
     except Exception as e:
-        st.debug(f"Error in get_image_for_topic: {e}")
+        # If any unexpected error occurs, return None
         return None
 
 # Improved function to convert presentation content to markdown for reveal.js
 def pptx_to_markdown(slide_content):
-    markdown = "---\ntheme: white\n---\n\n"
+    """Convert slide content to markdown for reveal.js with improved formatting."""
+    markdown = "---\ntheme: black\n---\n\n"
     
     # Split slides, handling different possible delimiters
     slides = re.split(r'\n\s*\n', slide_content)
@@ -396,6 +526,7 @@ def pptx_to_markdown(slide_content):
 
 # Function to gather research data using multiple web searches
 def gather_research_data(topic, subtopics=None):
+    """Gather research data from web searches for the presentation."""
     results = {}
     
     # Main topic search
@@ -413,6 +544,38 @@ def gather_research_data(topic, subtopics=None):
                 subtopic_results[subtopic] = search_web(search_query, num_results=2)
             
             results["subtopics"] = subtopic_results
+        else:
+            # If no subtopics provided, generate some based on the main topic
+            try:
+                # Auto-generate subtopics based on main search results
+                subtopics = []
+                subtopic_results = {}
+                
+                # Extract potential subtopics from main results
+                for result in main_results:
+                    snippet = result.get("snippet", "")
+                    title = result.get("title", "")
+                    
+                    # Extract phrases that might be good subtopics
+                    phrases = re.findall(r'([A-Z][^.!?]*?(benefit|feature|concept|principle|type|example|use case|application)[^.!?]*)', 
+                                        snippet + " " + title)
+                    
+                    for phrase in phrases:
+                        if phrase[0] not in subtopics and len(phrase[0].split()) <= 5:
+                            subtopics.append(phrase[0])
+                
+                # If we found some potential subtopics, search for them
+                if subtopics:
+                    subtopics = subtopics[:3]  # Limit to top 3 subtopics
+                    for i, subtopic in enumerate(subtopics):
+                        status.update(label=f"Researching auto-generated subtopic {i+1}/{len(subtopics)}: {subtopic}")
+                        search_query = f"{topic} {subtopic}"
+                        subtopic_results[subtopic] = search_web(search_query, num_results=2)
+                    
+                    results["subtopics"] = subtopic_results
+            except Exception as e:
+                # If auto-generation fails, just continue without subtopics
+                pass
         
         # Get deeper content from the most relevant page
         if isinstance(main_results, list) and len(main_results) > 0:
@@ -422,14 +585,15 @@ def gather_research_data(topic, subtopics=None):
                     status.update(label=f"Extracting detailed content from {main_url}")
                     results["detailed_content"] = extract_webpage_content(main_url)
             except Exception as e:
-                st.debug(f"Error extracting detailed content: {e}")
+                pass
         
         status.update(label="Research completed!", state="complete")
     
     return results
 
-# Function to generate slide content using Groq with research data
+# Improved function to generate slide content using Groq with research data
 def groq_generate_content(topic, context, research_data, num_slides=5):
+    """Generate slide content using Groq with research data."""
     if not groq_api_key:
         st.error("Please set your GROQ_API_KEY in a .env file or in Streamlit secrets.")
         return None
@@ -472,6 +636,7 @@ The presentation should follow these guidelines:
 4. Bullet points should be specific, actionable, and data-driven using the research
 5. Use the principle of "one idea per slide"
 6. Include a strong concluding slide with actionable takeaways
+7. Include simple flowcharts or diagrams when appropriate
 
 IMPORTANT: For each slide, provide:
 - A clear title prefixed with exactly "Title: " (this exact prefix is needed for processing)
@@ -490,6 +655,8 @@ Title: [Slide Title Here]
 [Bullet point 5 - no bullet symbol]
 
 Add a blank line between slides.
+
+FOR FLOWCHARTS: If a slide would benefit from a simple flowchart, add a note [FLOWCHART] at the end of that slide's content.
 
 Remember to cite sources where appropriate and maintain a professional tone."""
         
@@ -513,8 +680,9 @@ Remember to cite sources where appropriate and maintain a professional tone."""
         st.error(f"Error generating content with Groq: {e}")
         return None
 
-# Improved function to create a PowerPoint presentation with enhanced styling and theme application
+# Significantly improved function to create PowerPoint presentations with enhanced styling
 def create_presentation(topic, slide_content, theme="professional", include_images=True):
+    """Create a PowerPoint presentation with proper theme application and image integration."""
     prs = Presentation()
     
     # Set theme properties
@@ -522,6 +690,7 @@ def create_presentation(topic, slide_content, theme="professional", include_imag
     
     # Function to set background color for a slide
     def apply_background(slide, color):
+        """Apply background color to a slide."""
         left = top = 0
         width = prs.slide_width
         height = prs.slide_height
@@ -535,7 +704,7 @@ def create_presentation(topic, slide_content, theme="professional", include_imag
     title_slide_layout = prs.slide_layouts[0]
     slide = prs.slides.add_slide(title_slide_layout)
     
-    # Apply background for all themes
+    # Apply background color to title slide
     apply_background(slide, theme_properties["background_color"])
     
     title = slide.shapes.title
@@ -581,13 +750,20 @@ def create_presentation(topic, slide_content, theme="professional", include_imag
         
         # Get bullet points, skipping the title line
         bullet_points = []
+        needs_flowchart = False
+        
         for line in lines[1:]:
             line = line.strip()
             if not line:
                 continue
                 
+            # Check if the slide needs a flowchart
+            if "[FLOWCHART]" in line:
+                needs_flowchart = True
+                line = line.replace("[FLOWCHART]", "").strip()
+                
             # Clean up any existing bullet points to prevent doubling
-            line = re.sub(r'^[-*•]\s*', '', line)
+            line = re.sub(r'^[-*•■]\s*', '', line)
             if line:
                 bullet_points.append(line)
         
@@ -621,11 +797,11 @@ def create_presentation(topic, slide_content, theme="professional", include_imag
                 p.font.color.rgb = theme_properties["accent_color"]
                 p.level = 0  # First level bullet
         
-        # Add an image if enabled and not for the last slide
-        if include_images and slide_index < len(slides_content) - 1:
+        # Add an image if enabled
+        if include_images:
             try:
                 # Get an image related to the slide title
-                image_data = get_image_for_topic(slide_title)
+                image_data = get_image_for_topic(slide_title, use_flowchart=needs_flowchart)
                 
                 if image_data:
                     # Save the image to a BytesIO object
@@ -644,7 +820,6 @@ def create_presentation(topic, slide_content, theme="professional", include_imag
                     # Add the image to the slide
                     slide.shapes.add_picture(image_stream, left, top, width, height)
             except Exception as e:
-                st.debug(f"Error adding image: {e}")
                 # Continue without an image if there was an error
                 pass
     
@@ -690,14 +865,14 @@ with tab1:
         # Theme selection - improved with more visual cues
         st.subheader("Select Theme")
         
-        # Create a more visual theme selector
+        # Display theme options in a grid
         theme_cols = st.columns(3)
         
         for i, (theme_name, theme_props) in enumerate(THEMES.items()):
             with theme_cols[i % 3]:
                 theme_active = st.session_state.selected_theme == theme_name
                 
-                # Create a visual theme preview
+                # Create a color preview for the theme
                 r, g, b = theme_props["background_color"].rgb
                 tr, tg, tb = theme_props["title_color"].rgb
                 bg_color = f"rgb({r}, {g}, {b})"
