@@ -1,7 +1,7 @@
 import streamlit as st
 from pptx import Presentation
 from pptx.util import Inches, Pt
-from pptx.enum.text import PP_ALIGN
+from pptx.enum.text import PP_ALIGN, MSO_ANCHOR
 from pptx.dml.color import RGBColor
 from groq import Groq
 from dotenv import load_dotenv
@@ -9,14 +9,20 @@ import os
 import requests
 from bs4 import BeautifulSoup
 import io
-import reveal_slides as rs
-import concurrent.futures
 import json
 import base64
 from PIL import Image
 from io import BytesIO
 import re
 from urllib.parse import quote
+
+# Import reveal_slides safely with a fallback
+try:
+    import reveal_slides as rs
+    REVEAL_SLIDES_AVAILABLE = True
+except ImportError:
+    REVEAL_SLIDES_AVAILABLE = False
+    st.warning("For better slide previews, install streamlit-reveal-slides: pip install streamlit-reveal-slides")
 
 # Set page configuration
 st.set_page_config(
@@ -97,7 +103,7 @@ if 'include_images' not in st.session_state:
 if 'num_slides' not in st.session_state:
     st.session_state.num_slides = 5
 
-# Presentation themes
+# Presentation themes with more distinct colors
 THEMES = {
     "professional": {
         "title_font_size": Pt(36),
@@ -136,9 +142,9 @@ THEMES = {
     }
 }
 
-# Function to search the web for information
+# Function to search the web for information - Updated with more robust selectors and error handling
 def search_web(query, num_results=3):
-    """Search the web for information related to the query."""
+    """Search the web for information related to the query with improved error handling."""
     try:
         # Clean and encode the query
         clean_query = quote(query)
@@ -148,50 +154,106 @@ def search_web(query, num_results=3):
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
         }
         response = requests.get(
-            f"https://www.google.com/search?q={clean_query}&num={num_results}", 
-            headers=headers
+            f"https://www.google.com/search?q={clean_query}&num={num_results*2}", 
+            headers=headers,
+            timeout=10
         )
         
         if response.status_code != 200:
-            return {"error": f"Failed to retrieve search results: {response.status_code}"}
+            return [{"title": "Search Error", 
+                    "link": "#", 
+                    "snippet": f"Unable to retrieve search results (Status code: {response.status_code})"}]
         
         # Parse the HTML
         soup = BeautifulSoup(response.text, 'html.parser')
         
-        # Extract search results
+        # Extract search results - Try multiple selector patterns for better reliability
         results = []
-        search_divs = soup.select('div.g')[:num_results]
+        # Try different container selectors that Google might use
+        search_containers = []
+        search_containers.extend(soup.select('div.g'))
+        search_containers.extend(soup.select('div.Gx5Zad'))
+        search_containers.extend(soup.select('div.tF2Cxc'))
         
-        for div in search_divs:
+        for container in search_containers[:num_results]:
             try:
-                title_elem = div.select_one('h3')
+                # Try different title selectors
+                title_elem = None
+                for selector in ['h3', 'h3.LC20lb', 'div.DKV0Md']:
+                    title_elem = container.select_one(selector)
+                    if title_elem:
+                        break
+                
                 if not title_elem:
                     continue
                 
-                title = title_elem.text
+                title = title_elem.text.strip()
                 
-                link_elem = div.select_one('a')
-                link = link_elem['href'] if link_elem else ""
+                # Try different link selectors
+                link = ""
+                link_elem = container.select_one('a')
+                if link_elem and 'href' in link_elem.attrs:
+                    link = link_elem['href']
+                    if link.startswith('/url?'):
+                        link = re.search(r'url\?q=([^&]+)', link).group(1)
                 
-                # Look for snippets
-                snippet_elem = div.select_one('div.VwiC3b') or div.select_one('span.aCOpRe')
-                snippet = snippet_elem.text if snippet_elem else "No snippet available"
+                # Try different snippet selectors
+                snippet = "No description available"
+                for selector in ['div.VwiC3b', 'span.aCOpRe', 'div.s3v9rd', 'div.lEBKkf']:
+                    snippet_elem = container.select_one(selector)
+                    if snippet_elem:
+                        snippet = snippet_elem.text.strip()
+                        break
                 
-                results.append({
-                    "title": title,
-                    "link": link,
-                    "snippet": snippet
-                })
+                # Only add if we have at least a title
+                if title:
+                    results.append({
+                        "title": title,
+                        "link": link,
+                        "snippet": snippet
+                    })
+                
+                # Break if we have enough results
+                if len(results) >= num_results:
+                    break
+                    
             except Exception as e:
                 continue
         
+        # If we couldn't find any results with the selectors
+        if not results:
+            # Fallback - look for any links with text
+            for link in soup.select('a'):
+                if link.text and link.has_attr('href') and not link['href'].startswith('#'):
+                    results.append({
+                        "title": link.text.strip(),
+                        "link": link['href'],
+                        "snippet": "Description not available"
+                    })
+                    if len(results) >= num_results:
+                        break
+        
+        # If still no results, return a fallback
+        if not results:
+            results = [
+                {"title": "No Results Found", 
+                 "link": "#", 
+                 "snippet": f"Unable to find search results for '{query}'. Try a different search term."}
+            ]
+            
         return results
     except Exception as e:
-        return {"error": f"Error during web search: {str(e)}"}
+        # Return a friendly error message that can be displayed to users
+        return [{"title": "Search Error", 
+                "link": "#", 
+                "snippet": f"Error during web search: {str(e)}. Try again or use a different search term."}]
 
-# Function to extract content from a webpage
+# Function to extract content from a webpage with improved error handling
 def extract_webpage_content(url):
     try:
+        if not url.startswith('http'):
+            return "Invalid URL format"
+            
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
         }
@@ -221,56 +283,110 @@ def extract_webpage_content(url):
     except Exception as e:
         return f"Error extracting content: {str(e)}"
 
-# Function to get images for slides
+# Improved function to get images for slides with multiple fallback methods
 def get_image_for_topic(topic):
     try:
+        # Method 1: Try Unsplash API first (more reliable than scraping)
+        try:
+            unsplash_url = f"https://source.unsplash.com/featured/?{quote(topic)}"
+            response = requests.get(unsplash_url, timeout=10)
+            if response.status_code == 200:
+                return response.content
+        except:
+            pass
+            
+        # Method 2: Try Bing image search as before
         search_url = f"https://www.bing.com/images/search?q={quote(topic)}&first=1"
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
         }
-        response = requests.get(search_url, headers=headers)
+        response = requests.get(search_url, headers=headers, timeout=10)
         
-        if response.status_code != 200:
-            return None
+        if response.status_code == 200:
+            soup = BeautifulSoup(response.text, 'html.parser')
             
-        soup = BeautifulSoup(response.text, 'html.parser')
+            # Look for image URLs in the page - try multiple selectors
+            img_urls = []
+            for selector in ['img.mimg', 'a.iusc img', 'img.inflnk']:
+                for img in soup.select(selector):
+                    if 'src' in img.attrs and img['src'].startswith('http'):
+                        img_urls.append(img['src'])
+                    elif 'data-src' in img.attrs and img['data-src'].startswith('http'):
+                        img_urls.append(img['data-src'])
+            
+            # Look for base64 images as a last resort
+            if not img_urls:
+                for img in soup.select('img[src^="data:image"]'):
+                    try:
+                        img_data = img['src'].split(',')[1]
+                        img_binary = base64.b64decode(img_data)
+                        return img_binary
+                    except:
+                        continue
+                    
+            # Get the first valid image
+            for img_url in img_urls[:5]:
+                try:
+                    img_response = requests.get(img_url, headers=headers, timeout=5)
+                    if img_response.status_code == 200:
+                        return img_response.content
+                except:
+                    continue
         
-        # Look for image URLs in the page
-        img_urls = []
-        for img in soup.select('img.mimg'):
-            if 'src' in img.attrs and img['src'].startswith('http'):
-                img_urls.append(img['src'])
-                
-        if not img_urls:
-            return None
+        # Method 3: Fallback to a placeholder image service
+        try:
+            placeholder_url = f"https://via.placeholder.com/800x600.png?text={quote(topic)}"
+            response = requests.get(placeholder_url, timeout=5)
+            if response.status_code == 200:
+                return response.content
+        except:
+            pass
             
-        # Get the first valid image
-        for img_url in img_urls[:3]:
-            try:
-                img_response = requests.get(img_url, headers=headers, timeout=5)
-                if img_response.status_code == 200:
-                    return img_response.content
-            except:
-                continue
-                
         return None
     except Exception as e:
+        st.debug(f"Error in get_image_for_topic: {e}")
         return None
 
-# Function to convert presentation to markdown for reveal.js
+# Improved function to convert presentation content to markdown for reveal.js
 def pptx_to_markdown(slide_content):
     markdown = "---\ntheme: white\n---\n\n"
     
-    slides = slide_content.split("\n\n")
+    # Split slides, handling different possible delimiters
+    slides = re.split(r'\n\s*\n', slide_content)
+    
     for slide_text in slides:
-        lines = slide_text.split("\n")
-        if len(lines) < 2:
+        slide_text = slide_text.strip()
+        if not slide_text:
             continue
             
-        slide_title = lines[0].replace("Title: ", "").strip()
-        bullet_points = [point.strip() for point in lines[1:] if point.strip()]
+        lines = slide_text.splitlines()
+        if not lines:
+            continue
+            
+        # Handle slide title - look for "Title: " prefix or just use the first line
+        title_line = lines[0].strip()
+        if title_line.lower().startswith("title:"):
+            slide_title = title_line[6:].strip()  # Remove "Title: " prefix
+        else:
+            slide_title = title_line
+            
+        # Clean up any markdown symbols in the title
+        slide_title = re.sub(r'^#+\s*', '', slide_title)  # Remove any leading # characters
         
+        # Get bullet points, skipping the title line
+        bullet_points = []
+        for line in lines[1:]:
+            line = line.strip()
+            if not line:
+                continue
+                
+            # Clean up any existing bullet points to prevent doubling
+            line = re.sub(r'^[-*•]\s*', '', line)
+            bullet_points.append(line)
+        
+        # Add to markdown with proper formatting
         markdown += f"## {slide_title}\n\n"
+        
         for point in bullet_points:
             markdown += f"- {point}\n"
         
@@ -283,26 +399,32 @@ def gather_research_data(topic, subtopics=None):
     results = {}
     
     # Main topic search
-    main_results = search_web(topic, num_results=3)
-    results["main"] = main_results
-    
-    # Search for subtopics if provided
-    if subtopics:
-        subtopic_results = {}
-        for subtopic in subtopics:
-            search_query = f"{topic} {subtopic}"
-            subtopic_results[subtopic] = search_web(search_query, num_results=2)
+    with st.status("Searching web for information...", expanded=False) as status:
+        status.update(label="Searching for main topic...")
+        main_results = search_web(topic, num_results=3)
+        results["main"] = main_results
         
-        results["subtopics"] = subtopic_results
-    
-    # Get deeper content from the most relevant page
-    if isinstance(main_results, list) and len(main_results) > 0:
-        try:
-            main_url = main_results[0].get("link", "")
-            if main_url and main_url.startswith("http"):
-                results["detailed_content"] = extract_webpage_content(main_url)
-        except:
-            pass
+        # Search for subtopics if provided
+        if subtopics:
+            subtopic_results = {}
+            for i, subtopic in enumerate(subtopics):
+                status.update(label=f"Researching subtopic {i+1}/{len(subtopics)}: {subtopic}")
+                search_query = f"{topic} {subtopic}"
+                subtopic_results[subtopic] = search_web(search_query, num_results=2)
+            
+            results["subtopics"] = subtopic_results
+        
+        # Get deeper content from the most relevant page
+        if isinstance(main_results, list) and len(main_results) > 0:
+            try:
+                main_url = main_results[0].get("link", "")
+                if main_url and main_url.startswith("http"):
+                    status.update(label=f"Extracting detailed content from {main_url}")
+                    results["detailed_content"] = extract_webpage_content(main_url)
+            except Exception as e:
+                st.debug(f"Error extracting detailed content: {e}")
+        
+        status.update(label="Research completed!", state="complete")
     
     return results
 
@@ -351,11 +473,23 @@ The presentation should follow these guidelines:
 5. Use the principle of "one idea per slide"
 6. Include a strong concluding slide with actionable takeaways
 
-For each slide, provide:
-- A clear title (prefixed with "Title: ")
+IMPORTANT: For each slide, provide:
+- A clear title prefixed with exactly "Title: " (this exact prefix is needed for processing)
 - 3-5 concise bullet points that elaborate on the title
-- Each bullet point should provide valuable information, not just concepts
+- Each bullet point should be on a new line without any bullet symbols (no -, *, •)
 - Incorporate relevant statistics, facts, or data from the research
+- Avoid jargon or overly technical terms unless necessary
+- Ensure the content is engaging and visually appealing
+
+Use this exact format for each slide:
+Title: [Slide Title Here]
+[Bullet point 1 - no bullet symbol]
+[Bullet point 2 - no bullet symbol]
+[Bullet point 3 - no bullet symbol]
+[Bullet point 4 - no bullet symbol]
+[Bullet point 5 - no bullet symbol]
+
+Add a blank line between slides.
 
 Remember to cite sources where appropriate and maintain a professional tone."""
         
@@ -379,16 +513,31 @@ Remember to cite sources where appropriate and maintain a professional tone."""
         st.error(f"Error generating content with Groq: {e}")
         return None
 
-# Function to create a PowerPoint presentation with enhanced styling
+# Improved function to create a PowerPoint presentation with enhanced styling and theme application
 def create_presentation(topic, slide_content, theme="professional", include_images=True):
     prs = Presentation()
     
     # Set theme properties
     theme_properties = THEMES.get(theme, THEMES["professional"])
     
+    # Function to set background color for a slide
+    def apply_background(slide, color):
+        left = top = 0
+        width = prs.slide_width
+        height = prs.slide_height
+        shape = slide.shapes.add_shape(1, left, top, width, height)
+        shape.fill.solid()
+        shape.fill.fore_color.rgb = color
+        shape.line.fill.background()
+        shape.z_order = 0  # Send to back
+    
     # Title Slide
     title_slide_layout = prs.slide_layouts[0]
     slide = prs.slides.add_slide(title_slide_layout)
+    
+    # Apply background for all themes
+    apply_background(slide, theme_properties["background_color"])
+    
     title = slide.shapes.title
     subtitle = slide.placeholders[1]
     
@@ -400,52 +549,54 @@ def create_presentation(topic, slide_content, theme="professional", include_imag
     for paragraph in title.text_frame.paragraphs:
         paragraph.font.size = theme_properties["title_font_size"]
         paragraph.font.color.rgb = theme_properties["title_color"]
+        paragraph.alignment = PP_ALIGN.CENTER
     
     for paragraph in subtitle.text_frame.paragraphs:
         paragraph.font.size = Pt(24)
         paragraph.font.color.rgb = theme_properties["accent_color"]
-    
-    # Add a background shape if we're using the dark theme
-    if theme == "dark":
-        left = top = 0
-        width = prs.slide_width
-        height = prs.slide_height
-        shape = slide.shapes.add_shape(1, left, top, width, height)
-        shape.fill.solid()
-        shape.fill.fore_color.rgb = theme_properties["background_color"]
-        shape.line.fill.background()
-        shape.z_order = 0  # Send to back
-        
-        # Make title and subtitle text visible against dark background
-        for paragraph in title.text_frame.paragraphs:
-            paragraph.font.color.rgb = RGBColor(255, 255, 255)
-        for paragraph in subtitle.text_frame.paragraphs:
-            paragraph.font.color.rgb = RGBColor(220, 220, 220)
+        paragraph.alignment = PP_ALIGN.CENTER
     
     # Create content slides
-    slides = slide_content.split("\n\n")
-    for slide_index, slide_text in enumerate(slides):
-        lines = slide_text.split("\n")
-        if len(lines) < 2:
+    # First, clean up and parse the slide content
+    slides_content = re.split(r'\n\s*\n', slide_content)
+    
+    for slide_index, slide_text in enumerate(slides_content):
+        slide_text = slide_text.strip()
+        if not slide_text:
             continue
+            
+        lines = slide_text.splitlines()
+        if not lines:
+            continue
+            
+        # Handle slide title
+        title_line = lines[0].strip()
+        if title_line.lower().startswith("title:"):
+            slide_title = title_line[6:].strip()  # Remove "Title: " prefix
+        else:
+            slide_title = title_line
         
-        slide_title = lines[0].replace("Title: ", "").strip()
-        bullet_points = [point.strip() for point in lines[1:] if point.strip()]
+        # Clean up any markdown symbols in the title
+        slide_title = re.sub(r'^#+\s*', '', slide_title)  # Remove any leading # characters
+        
+        # Get bullet points, skipping the title line
+        bullet_points = []
+        for line in lines[1:]:
+            line = line.strip()
+            if not line:
+                continue
+                
+            # Clean up any existing bullet points to prevent doubling
+            line = re.sub(r'^[-*•]\s*', '', line)
+            if line:
+                bullet_points.append(line)
         
         # Add content slide
         content_slide_layout = prs.slide_layouts[1]  # Layout with title and content
         slide = prs.slides.add_slide(content_slide_layout)
         
-        # Apply background for dark theme
-        if theme == "dark":
-            left = top = 0
-            width = prs.slide_width
-            height = prs.slide_height
-            shape = slide.shapes.add_shape(1, left, top, width, height)
-            shape.fill.solid()
-            shape.fill.fore_color.rgb = theme_properties["background_color"]
-            shape.line.fill.background()
-            shape.z_order = 0  # Send to back
+        # Apply background
+        apply_background(slide, theme_properties["background_color"])
         
         # Set title
         title = slide.shapes.title
@@ -454,21 +605,24 @@ def create_presentation(topic, slide_content, theme="professional", include_imag
         # Apply theme formatting to title
         for paragraph in title.text_frame.paragraphs:
             paragraph.font.size = theme_properties["title_font_size"]
-            paragraph.font.color.rgb = theme_properties["title_color"] if theme != "dark" else RGBColor(255, 255, 255)
+            paragraph.font.color.rgb = theme_properties["title_color"]
+            paragraph.alignment = PP_ALIGN.LEFT
         
         # Add bullet points
-        body = slide.placeholders[1]
-        tf = body.text_frame
-        tf.text = ""  # Clear any default text
-        
-        for point in bullet_points:
-            p = tf.add_paragraph()
-            p.text = point
-            p.font.size = theme_properties["body_font_size"]
-            p.font.color.rgb = theme_properties["accent_color"] if theme != "dark" else RGBColor(220, 220, 220)
+        if bullet_points:
+            body = slide.placeholders[1]
+            tf = body.text_frame
+            tf.text = ""  # Clear any default text
+            
+            for point in bullet_points:
+                p = tf.add_paragraph()
+                p.text = point
+                p.font.size = theme_properties["body_font_size"]
+                p.font.color.rgb = theme_properties["accent_color"]
+                p.level = 0  # First level bullet
         
         # Add an image if enabled and not for the last slide
-        if include_images and slide_index > 0 and slide_index < len(slides) - 1:
+        if include_images and slide_index < len(slides_content) - 1:
             try:
                 # Get an image related to the slide title
                 image_data = get_image_for_topic(slide_title)
@@ -489,7 +643,8 @@ def create_presentation(topic, slide_content, theme="professional", include_imag
                     
                     # Add the image to the slide
                     slide.shapes.add_picture(image_stream, left, top, width, height)
-            except:
+            except Exception as e:
+                st.debug(f"Error adding image: {e}")
                 # Continue without an image if there was an error
                 pass
     
@@ -532,19 +687,44 @@ with tab1:
         # Include images option
         st.session_state.include_images = st.checkbox("Include Images in Slides", value=True)
         
-        # Theme selection
+        # Theme selection - improved with more visual cues
         st.subheader("Select Theme")
+        
+        # Create a more visual theme selector
         theme_cols = st.columns(3)
         
-        for i, (theme_name, _) in enumerate(THEMES.items()):
+        for i, (theme_name, theme_props) in enumerate(THEMES.items()):
             with theme_cols[i % 3]:
                 theme_active = st.session_state.selected_theme == theme_name
+                
+                # Create a visual theme preview
+                r, g, b = theme_props["background_color"].rgb
+                tr, tg, tb = theme_props["title_color"].rgb
+                bg_color = f"rgb({r}, {g}, {b})"
+                text_color = f"rgb({tr}, {tg}, {tb})"
+                
+                # HTML for theme preview
+                st.markdown(
+                    f"""
+                    <div style="background-color: {bg_color}; padding: 10px; 
+                         border-radius: 5px; margin-bottom: 10px;
+                         border: {3 if theme_active else 1}px solid {'blue' if theme_active else '#ddd'};
+                         text-align: center;">
+                        <div style="color: {text_color}; font-weight: bold;">{theme_name.capitalize()}</div>
+                    </div>
+                    """, 
+                    unsafe_allow_html=True
+                )
+                
+                # Button to select theme
                 if st.button(
-                    theme_name.capitalize(), 
+                    f"Select {theme_name.capitalize()}", 
                     key=f"theme_{theme_name}",
-                    type="primary" if theme_active else "secondary"
+                    type="primary" if theme_active else "secondary",
+                    use_container_width=True
                 ):
                     st.session_state.selected_theme = theme_name
+                    st.rerun()  # Force refresh to update UI
     
     # Generate slides button
     if st.button("Generate Presentation with Web Research", use_container_width=True, type="primary"):
@@ -622,7 +802,7 @@ with tab1:
                         file_name=f"{topic.replace(' ', '_')}_presentation.pptx",
                         mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
                         use_container_width=True,
-                                key="download_button_tab1"  # Use a different unique key here
+                        key="download_button_tab1"
                     )
 
 with tab2:
@@ -631,11 +811,22 @@ with tab2:
     if st.session_state.slide_markdown:
         # Display presentation preview
         try:
-            st.markdown("#### Interactive Slide Preview")
-            rs.slides(st.session_state.slide_markdown, height=500)
+            if REVEAL_SLIDES_AVAILABLE:
+                st.markdown("#### Interactive Slide Preview")
+                rs.slides(st.session_state.slide_markdown, height=500)
+            else:
+                # Fallback to simple preview
+                st.markdown("#### Slide Content Preview")
+                
+                # Split into slides for better preview
+                slide_parts = st.session_state.slide_markdown.split("---")
+                for i, slide in enumerate(slide_parts):
+                    if slide.strip():
+                        with st.expander(f"Slide {i}", expanded=True):
+                            st.markdown(slide)
+                            
         except Exception as e:
             st.error(f"Error displaying slides: {e}")
-            st.info("Please install streamlit-reveal-slides using 'pip install streamlit-reveal-slides'")
             
             # Fallback to simple preview
             st.markdown("#### Slide Content Preview")
@@ -649,7 +840,7 @@ with tab2:
                 file_name=f"{topic.replace(' ', '_')}_presentation.pptx",
                 mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
                 use_container_width=True,
-                        key="download_button_tab2"  # Use a different unique key here
+                key="download_button_tab2"
             )
     else:
         st.info("Generate a presentation in the 'Create Presentation' tab to see a preview here.")
