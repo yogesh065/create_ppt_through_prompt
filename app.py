@@ -872,8 +872,10 @@ with tab1:
             with theme_cols[i % 3]:
                 theme_active = st.session_state.selected_theme == theme_name
                 
-                background_rgb = theme_props["background_color"].rgb
-                title_rgb = theme_props["title_color"].rgb
+                # Get RGB values using tuple indexing
+                background_rgb = theme_props["background_color"]
+                title_rgb = theme_props["title_color"]
+                
                 bg_color = f"rgb({background_rgb[0]}, {background_rgb[1]}, {background_rgb[2]})"
                 text_color = f"rgb({title_rgb[0]}, {title_rgb[1]}, {title_rgb[2]})"
                 
@@ -881,14 +883,15 @@ with tab1:
                 st.markdown(
                     f"""
                     <div style="background-color: {bg_color}; padding: 10px; 
-                         border-radius: 5px; margin-bottom: 10px;
-                         border: {3 if theme_active else 1}px solid {'blue' if theme_active else '#ddd'};
-                         text-align: center;">
+                        border-radius: 5px; margin-bottom: 10px;
+                        border: {3 if theme_active else 1}px solid {'blue' if theme_active else '#ddd'};
+                        text-align: center;">
                         <div style="color: {text_color}; font-weight: bold;">{theme_name.capitalize()}</div>
                     </div>
                     """, 
                     unsafe_allow_html=True
                 )
+
                 
                 # Button to select theme
                 if st.button(
