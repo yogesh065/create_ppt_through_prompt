@@ -873,10 +873,11 @@ with tab1:
                 theme_active = st.session_state.selected_theme == theme_name
                 
                 # Create a color preview for the theme
-                r, g, b = theme_props["background_color"].rgb
-                tr, tg, tb = theme_props["title_color"].rgb
-                bg_color = f"rgb({r}, {g}, {b})"
-                text_color = f"rgb({tr}, {tg}, {tb})"
+               # Access individual RGB components directly
+                bg_color = theme_props["background_color"]
+                title_color = theme_props["title_color"]
+                r, g, b = bg_color.r, bg_color.g, bg_color.b
+                tr, tg, tb = title_color.r, title_color.g, title_color.b
                 
                 # HTML for theme preview
                 st.markdown(
