@@ -872,14 +872,10 @@ with tab1:
             with theme_cols[i % 3]:
                 theme_active = st.session_state.selected_theme == theme_name
                 
-                r = theme_props["background_color"].r
-                g = theme_props["background_color"].g
-                b = theme_props["background_color"].b
-                tr = theme_props["title_color"].r
-                tg = theme_props["title_color"].g
-                tb = theme_props["title_color"].b
-                bg_color = f"rgb({r}, {g}, {b})"
-                text_color = f"rgb({tr}, {tg}, {tb})"
+                background_rgb = theme_props["background_color"].rgb
+                title_rgb = theme_props["title_color"].rgb
+                bg_color = f"rgb({background_rgb[0]}, {background_rgb[1]}, {background_rgb[2]})"
+                text_color = f"rgb({title_rgb[0]}, {title_rgb[1]}, {title_rgb[2]})"
                 
                 # HTML for theme preview
                 st.markdown(
